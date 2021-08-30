@@ -1,0 +1,17 @@
+[package]
+name = "longan-nano-usb"
+version = "0.1.0"
+authors = ["SpitfireX <timm.weber@me.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+riscv = "0.7.0"
+riscv-rt = "0.8.0"
+gd32vf103xx-hal = "0.4.0"
+panic-halt = "0.2.0"
+usb-device = "0.2.8"
+synopsys-usb-otg = { version = "0.2.4", features = ["riscv", "fs"] }
+embedded-hal = "0.2.6"
+nb = "^0.1.2"
