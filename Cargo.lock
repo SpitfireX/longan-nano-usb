@@ -96,6 +96,7 @@ dependencies = [
  "embedded-hal",
  "gd32vf103xx-hal",
  "nb 0.1.3",
+ "numeric-enum-macro",
  "panic-halt",
  "riscv 0.7.0",
  "riscv-rt",
@@ -123,6 +124,12 @@ name = "nb"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "546c37ac5d9e56f55e73b677106873d9d9f5190605e41a856503623648488cae"
+
+[[package]]
+name = "numeric-enum-macro"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "300e4bdb6b46b592948e700ea1ef24a4296491f6a0ee722b258040abd15a3714"
 
 [[package]]
 name = "panic-halt"

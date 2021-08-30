@@ -15,3 +15,4 @@ usb-device = "0.2.8"
 synopsys-usb-otg = { version = "0.2.4", features = ["riscv", "fs"] }
 embedded-hal = "0.2.6"
 nb = "^0.1.2"
+numeric-enum-macro = "0.2.0"
