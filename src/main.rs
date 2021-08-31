@@ -25,6 +25,8 @@ use synopsys_usb_otg::{UsbBus, UsbPeripheral};
 
 use usb_device::prelude::*;
 
+use usb_setup::SetupPacket;
+
 #[entry]
 fn main() -> ! {
     let dp = pac::Peripherals::take().unwrap();
@@ -189,9 +191,26 @@ fn main() -> ! {
                         }
 
                         writeln!(tx, "grstatp received data: {:02X?}\r", &usbdata[..di]).ok();
-                        usbdata.fill(0);
-                        di = 0;
                     }
+
+                    // packet matching stuff
+                    match s.received_packet_status {
+                        ReceivedPacketStatus::SetupReceived => {
+                            match SetupPacket::parse(&usbdata[..di]) {
+                                Ok(packet) => {
+                                    writeln!(tx, "setup parse: {:04X?}\r", packet).ok();
+                                }
+                                Err(e) => {
+                                    writeln!(tx, "setup parse: error \"{}\"\r", e).ok();
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+
+                    // clear usb_data
+                    usbdata.fill(0);
+                    di = 0;
                 }
 
                 Err(v) => {
@@ -260,5 +279,131 @@ impl RxStatus {
             byte_count: reg.bcount().bits(),
             endpoint_num: reg.epnum().bits(),
         })
+    }
+}
+
+mod usb_setup {
+    use core::{convert::TryFrom, marker::PhantomData};
+
+    use numeric_enum_macro::numeric_enum;
+
+    use byteorder::{ByteOrder, LittleEndian};
+
+    // USB Setup bmRequestType D7 Data Direction
+    numeric_enum! {
+        #[repr(u8)]
+        #[derive(Debug)]
+        enum DataDirection {
+            HostToDevice = 0,
+            DeviceToHost = 1,
+        }
+    }
+
+    // USB Setup bmRequestType D6:5 Type
+    numeric_enum! {
+        #[repr(u8)]
+        #[derive(Debug)]
+        enum Type {
+            Standard = 0,
+            Class = 1,
+            Vendor = 2,
+            Reserved = 3,
+        }
+    }
+
+    // USB Setup bmRequestType D4:0 Recipient
+    numeric_enum! {
+        #[repr(u8)]
+        #[derive(Debug)]
+        enum Recipient {
+            Device = 0,
+            Interface = 1,
+            Endpoint = 2,
+            Other = 3,
+        }
+    }
+
+    // USB Setup bmRequestType
+    #[derive(Debug)]
+    struct RequestType {
+        data_direction: DataDirection,
+        request_type: Type,
+        recipient: Recipient,
+    }
+
+    impl RequestType {
+        fn from_u8(byte: u8) -> Result<Self, ()> {
+            let data_direction = match DataDirection::try_from(byte >> 7) {
+                Ok(v) => v,
+                Err(_) => return Err(()),
+            };
+
+            let request_type = match Type::try_from((byte >> 5) & 3) {
+                Ok(v) => v,
+                Err(_) => return Err(()),
+            };
+
+            let recipient = match Recipient::try_from(byte & 31) {
+                Ok(v) => v,
+                Err(_) => return Err(()),
+            };
+            
+            Ok(Self {
+                data_direction,
+                request_type,
+                recipient,
+            })
+        }
+    }
+
+    // USB Setup bRequest for device requests
+    numeric_enum! {
+        #[repr(u8)]
+        #[derive(Debug)]
+        enum DeviceRequest {
+            GetStatus = 0,
+            ClearFeature = 1,
+            SetFeature = 3,
+            SetAddress = 5,
+            GetDescriptor = 6,
+            SetDescriptor = 7,
+            GetConfiguration = 8,
+            SetConfiguration = 9,
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct SetupPacket {
+        request_type: RequestType,
+        request: DeviceRequest,
+        value: u16,
+        index: u16,
+        length: u16,
+    }
+
+    impl SetupPacket {
+        pub fn parse(data: &[u8]) -> Result<Self, &str> {
+            if data.len() >= 8 {
+                let request_type = match RequestType::from_u8(data[0]){
+                    Ok(v) => v,
+                    Err(_) => return Err("parsing request type"),
+                };
+
+                let request = match DeviceRequest::try_from(data[1]) {
+                    Ok(v) => v,
+                    Err(_) => return Err("parsing request"),
+                };
+
+                Ok(Self {
+                    request_type,
+                    request,
+                    value: LittleEndian::read_u16(&data[2..4]),
+                    index: LittleEndian::read_u16(&data[4..6]),
+                    length: LittleEndian::read_u16(&data[6..]),
+                })
+            } else {
+                Err("wrong len")
+            }
+        }
     }
 }
