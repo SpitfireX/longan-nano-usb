@@ -142,7 +142,7 @@ fn main() -> ! {
     usbfs_device.diep0ctl.modify(|_, w| {
         unsafe {
             w.epen().set_bit()
-            .mpl().bits(0b11) // 8 byte
+            .mpl().bits(0b11) // 8 bytes
         }
     });
 
@@ -158,6 +158,9 @@ fn main() -> ! {
         }
     });
 
+    let mut usbdata = [0_u8; 1024];
+    let mut di = 0_usize;
+
     loop {
         if usbfs_global.gintf.read().rxfneif().bit_is_set() {
             
@@ -168,6 +171,7 @@ fn main() -> ! {
                 Ok(s) => {
                     writeln!(tx, "grstatp status: {:?}\r", s).ok();
 
+                    // pop more data if necessary
                     if s.byte_count > 0 {
                         let npops = if s.byte_count%4 == 0 {
                             s.byte_count/4
@@ -177,8 +181,16 @@ fn main() -> ! {
 
                         for _ in 0..npops {
                             let data = usbfs_global.grstatp_device().read().bits();
-                            writeln!(tx, "grstatp data: {:#010X}\r", data).ok();
+                            writeln!(tx, "grstatp word: {:#010X}\r", data).ok();
+
+                            let bytes = data.to_ne_bytes();
+                            usbdata[di..di+bytes.len()].copy_from_slice(&bytes);
+                            di += 4;
                         }
+
+                        writeln!(tx, "grstatp received data: {:02X?}\r", &usbdata[..di]).ok();
+                        usbdata.fill(0);
+                        di = 0;
                     }
                 }
 
@@ -189,6 +201,8 @@ fn main() -> ! {
 
             // unmask Receive FIFO non-empty interrupt
             usbfs_global.ginten.modify(|_, w| { w.rxfneie().set_bit() });
+
+            writeln!(tx, "---\r").ok();
         }
     }
 }
