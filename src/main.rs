@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+use byteorder::ByteOrder;
+use byteorder::LittleEndian;
 use panic_halt as _;
 
 use riscv::register::mhpmcounter10::write;
@@ -25,7 +27,9 @@ use synopsys_usb_otg::{UsbBus, UsbPeripheral};
 
 use usb_device::prelude::*;
 
-use usb_setup::SetupPacket;
+use usb_setup::*;
+
+use core::ptr;
 
 #[entry]
 fn main() -> ! {
@@ -160,6 +164,10 @@ fn main() -> ! {
         }
     });
 
+    // set FIFO sizes
+    usbfs_global.grflen.modify(|_, w| unsafe { w.rxfd().bits(12) });
+    usbfs_global.diep0tflen_mut().modify(|_, w| unsafe { w.iep0txfd().bits(12) });
+
     let mut usbdata = [0_u8; 1024];
     let mut di = 0_usize;
 
@@ -199,6 +207,7 @@ fn main() -> ! {
                             match SetupPacket::parse(&usbdata[..di]) {
                                 Ok(packet) => {
                                     writeln!(tx, "setup parse: {:04X?}\r", packet).ok();
+                                    process_setup(&usbfs_global, &usbfs_device, &packet);
                                 }
                                 Err(e) => {
                                     writeln!(tx, "setup parse: error \"{}\"\r", e).ok();
@@ -222,6 +231,71 @@ fn main() -> ! {
             usbfs_global.ginten.modify(|_, w| { w.rxfneie().set_bit() });
 
             writeln!(tx, "---\r").ok();
+        }
+    }
+}
+
+const DESCRIPTOR: [u8; 18] = [
+    // Device
+    0x12,                       // bLength (Size of this descriptor in bytes) 
+    0x01,                       // bDescriptorType (DEVICE Descriptor Type) 
+    0x00, 0x02,                 // bcdUSB (USB Specification Release Number in Binary-Coded Decimal) ("2.0") (512) 
+    0x00,                       // bDeviceClass (Class code (assigned by the USB-IF).) ("Defined at interface level") 
+    0x00,                       // bDeviceSubClass (Subclass code (assigned by the USB-IF).) 
+    0x00,                       // bDeviceProtocol (Protocol code (assigned by the USB-IF).) 
+    0x40,                       // bMaxPacketSize0 (Maximum packet size for endpoint zero) ("64") 
+    0xC0, 0x16,                 // idVendor (Vendor ID (assigned by the USB-IF)) (0) 
+    0xDD, 0x27,                 // idProduct (Product ID (assigned by the manufacturer)) (0) 
+    0x00, 0x00,                 // bcdDevice (Device release number in binary-coded decimal) (0) 
+    0x01,                       // iManufacturer 
+    0x02,                       // iProduct 
+    0x03,                       // iSerialNumber 
+    0x01,                       // bNumConfigurations (Number of possible configurations) 
+];  
+
+fn process_setup(usbfs_global: &pac::usbfs_global::RegisterBlock, usbfs_device: &pac::usbfs_device::RegisterBlock, packet: &SetupPacket) {
+    match (&packet.request_type, &packet.request) {
+        (_, DeviceRequest::GetDescriptor) => {
+            ep0in_setup_tx(usbfs_global, usbfs_device, &DESCRIPTOR);
+            ep0in_enable(usbfs_global, usbfs_device);
+            ep0in_tx(usbfs_global, usbfs_device, &DESCRIPTOR);
+        }
+        (_, _) => {}
+    }
+}
+
+fn ep0in_enable(usbfs_global: &pac::usbfs_global::RegisterBlock, usbfs_device: &pac::usbfs_device::RegisterBlock) {
+    usbfs_device.diep0ctl.modify(|_, w| {
+        unsafe {
+            w.epen().set_bit() // endpoint enable
+             .mpl().bits(0) // 64 bytes
+             .txfnum().bits(0) // fifo 0
+             .cnak().clear_bit() // disable NAK
+        }
+    });
+}
+
+fn ep0in_setup_tx(usbfs_global: &pac::usbfs_global::RegisterBlock, usbfs_device: &pac::usbfs_device::RegisterBlock, buffer: &[u8]) {
+    usbfs_device.diep0len.modify(|_, w| {
+        unsafe {
+            w.tlen().bits(buffer.len() as u8)
+             .pcnt().bits(1)
+        }
+    });
+}
+
+fn ep0in_tx(usbfs_global: &pac::usbfs_global::RegisterBlock, usbfs_device: &pac::usbfs_device::RegisterBlock, buffer: &[u8]) {
+    let fifo = (0x50000000 + 0x1000) as *mut u32;
+    
+    for chunk in buffer.rchunks(4) {
+        let mut w = LittleEndian::read_u32(chunk);
+
+        if chunk.len() != 4 {
+            w <<= 4 - chunk.len();
+        }
+
+        unsafe {
+            ptr::write_volatile(fifo, w);
         }
     }
 }
@@ -293,7 +367,7 @@ mod usb_setup {
     numeric_enum! {
         #[repr(u8)]
         #[derive(Debug)]
-        enum DataDirection {
+        pub enum DataDirection {
             HostToDevice = 0,
             DeviceToHost = 1,
         }
@@ -303,7 +377,7 @@ mod usb_setup {
     numeric_enum! {
         #[repr(u8)]
         #[derive(Debug)]
-        enum Type {
+        pub enum Type {
             Standard = 0,
             Class = 1,
             Vendor = 2,
@@ -315,7 +389,7 @@ mod usb_setup {
     numeric_enum! {
         #[repr(u8)]
         #[derive(Debug)]
-        enum Recipient {
+        pub enum Recipient {
             Device = 0,
             Interface = 1,
             Endpoint = 2,
@@ -325,14 +399,14 @@ mod usb_setup {
 
     // USB Setup bmRequestType
     #[derive(Debug)]
-    struct RequestType {
-        data_direction: DataDirection,
-        request_type: Type,
-        recipient: Recipient,
+    pub struct RequestType {
+        pub data_direction: DataDirection,
+        pub request_type: Type,
+        pub recipient: Recipient,
     }
 
     impl RequestType {
-        fn from_u8(byte: u8) -> Result<Self, ()> {
+        pub fn from_u8(byte: u8) -> Result<Self, ()> {
             let data_direction = match DataDirection::try_from(byte >> 7) {
                 Ok(v) => v,
                 Err(_) => return Err(()),
@@ -360,7 +434,7 @@ mod usb_setup {
     numeric_enum! {
         #[repr(u8)]
         #[derive(Debug)]
-        enum DeviceRequest {
+        pub enum DeviceRequest {
             GetStatus = 0,
             ClearFeature = 1,
             SetFeature = 3,
@@ -374,11 +448,11 @@ mod usb_setup {
 
     #[derive(Debug)]
     pub struct SetupPacket {
-        request_type: RequestType,
-        request: DeviceRequest,
-        value: u16,
-        index: u16,
-        length: u16,
+        pub request_type: RequestType,
+        pub request: DeviceRequest,
+        pub value: u16,
+        pub index: u16,
+        pub length: u16,
     }
 
     impl SetupPacket {
