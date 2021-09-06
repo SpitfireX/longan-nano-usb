@@ -265,11 +265,16 @@ fn process_setup(usbfs_global: &pac::usbfs_global::RegisterBlock, usbfs_device: 
 }
 
 fn ep0in_enable(usbfs_global: &pac::usbfs_global::RegisterBlock, usbfs_device: &pac::usbfs_device::RegisterBlock) {
+    usbfs_device.diepinten.modify(|_, w| {
+        w.iepneen().set_bit()
+         .tfen().set_bit()
+    });
+    
     usbfs_device.diep0ctl.modify(|_, w| {
         unsafe {
             w.epen().set_bit() // endpoint enable
              .mpl().bits(0) // 64 bytes
-             .txfnum().bits(0) // fifo 0
+            //  .txfnum().bits(0) // fifo 0
              .cnak().clear_bit() // disable NAK
         }
     });
@@ -285,7 +290,7 @@ fn ep0in_setup_tx(usbfs_global: &pac::usbfs_global::RegisterBlock, usbfs_device:
 }
 
 fn ep0in_tx(usbfs_global: &pac::usbfs_global::RegisterBlock, usbfs_device: &pac::usbfs_device::RegisterBlock, buffer: &[u8]) {
-    let fifo = (0x50000000 + 0x1000) as *mut u32;
+    let fifo = 0x50001000 as *mut u32;
     
     for chunk in buffer.rchunks(4) {
         let mut w = LittleEndian::read_u32(chunk);
